@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { buildFairnessReport } from "@/lib/fairness";
 import {
   createGroupingExportFileName,
@@ -8,6 +8,7 @@ import {
   serializeGrouping,
 } from "@/lib/grouping-io";
 import type { GroupingState } from "@/lib/grouping-io";
+import type { PersistedState } from "@/lib/persistence/types";
 import { defaultScoringRule, calculateStandings, isTournamentComplete } from "@/lib/scoring";
 import {
   calculateMatchCapacity,
@@ -22,9 +23,13 @@ type Tab = "setup" | "groups" | "schedule" | "fairness" | "results" | "rankings"
 
 const initialStartsAt = "2026-05-06T09:00";
 const initialEndsAt = "2026-05-06T12:00";
+const persistenceEnabled =
+  Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) &&
+  Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 
 export function BadmintonApp() {
   const importInputRef = useRef<HTMLInputElement>(null);
+  const hasLoadedStateRef = useRef(false);
   const [tab, setTab] = useState<Tab>("setup");
   const [totalPlayers, setTotalPlayers] = useState(50);
   const [groupCount, setGroupCount] = useState(7);
@@ -37,6 +42,9 @@ export function BadmintonApp() {
   const [matches, setMatches] = useState<Match[]>([]);
   const [results, setResults] = useState<MatchResult[]>([]);
   const [error, setError] = useState("");
+  const [persistenceStatus, setPersistenceStatus] = useState<
+    "disabled" | "loading" | "ready" | "saving" | "error"
+  >(persistenceEnabled ? "loading" : "disabled");
 
   const capacity = calculateMatchCapacity(startsAt, endsAt, courtCount);
   const schedule: Schedule | null = useMemo(() => {
@@ -58,6 +66,111 @@ export function BadmintonApp() {
 
     return calculateStandings(schedule.groups, schedule.matches, results, scoringRule);
   }, [isScheduleGenerated, results, schedule, scoringRule]);
+
+  useEffect(() => {
+    if (!persistenceEnabled) {
+      hasLoadedStateRef.current = true;
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadState() {
+      try {
+        const response = await fetch("/api/state", { cache: "no-store" });
+
+        if (!response.ok) {
+          throw new Error("저장 상태를 불러오지 못했습니다.");
+        }
+
+        const data = (await response.json()) as { payload: PersistedState | null };
+
+        if (cancelled) {
+          return;
+        }
+
+        if (data.payload) {
+          setTotalPlayers(data.payload.totalPlayers);
+          setGroupCount(data.payload.groupCount);
+          setCourtCount(data.payload.courtCount);
+          setStartsAt(data.payload.startsAt);
+          setEndsAt(data.payload.endsAt);
+          setNamesText(data.payload.namesText);
+          setScoringRule(data.payload.scoringRule);
+          setGrouping(data.payload.grouping);
+          setMatches(data.payload.matches);
+          setResults(data.payload.results);
+        }
+
+        setPersistenceStatus("ready");
+      } catch {
+        if (!cancelled) {
+          setPersistenceStatus("error");
+        }
+      } finally {
+        if (!cancelled) {
+          hasLoadedStateRef.current = true;
+        }
+      }
+    }
+
+    loadState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!persistenceEnabled || !hasLoadedStateRef.current) {
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      const payload: PersistedState = {
+        totalPlayers,
+        groupCount,
+        courtCount,
+        startsAt,
+        endsAt,
+        namesText,
+        scoringRule,
+        grouping,
+        matches,
+        results,
+      };
+
+      try {
+        setPersistenceStatus("saving");
+        const response = await fetch("/api/state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ payload }),
+        });
+
+        if (!response.ok) {
+          throw new Error("저장 실패");
+        }
+
+        setPersistenceStatus("ready");
+      } catch {
+        setPersistenceStatus("error");
+      }
+    }, 700);
+
+    return () => clearTimeout(timer);
+  }, [
+    totalPlayers,
+    groupCount,
+    courtCount,
+    startsAt,
+    endsAt,
+    namesText,
+    scoringRule,
+    grouping,
+    matches,
+    results,
+  ]);
 
   function resetGeneratedData() {
     setGrouping(null);
@@ -225,6 +338,9 @@ export function BadmintonApp() {
         <p className="mt-4 max-w-3xl text-sm leading-6 text-zinc-300 sm:text-base">
           운영 시간, 코트 수, 조 개수를 입력하면 15분 단위로 대진표를 만들고 공평성 통계,
           결과 입력, 순위 계산까지 한 화면에서 확인합니다.
+        </p>
+        <p className="mt-3 text-xs text-zinc-400">
+          저장 상태: {persistenceLabel(persistenceStatus)}
         </p>
       </header>
 
@@ -884,4 +1000,21 @@ function timeLabel(value: string) {
 
 function courtName(schedule: Schedule, courtId: string) {
   return schedule.courts.find((court) => court.id === courtId)?.name ?? "";
+}
+
+function persistenceLabel(status: "disabled" | "loading" | "ready" | "saving" | "error") {
+  if (status === "disabled") {
+    return "비활성화 (Supabase env 필요)";
+  }
+  if (status === "loading") {
+    return "불러오는 중";
+  }
+  if (status === "saving") {
+    return "저장 중";
+  }
+  if (status === "error") {
+    return "오류";
+  }
+
+  return "정상";
 }

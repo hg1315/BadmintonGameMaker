@@ -28,6 +28,18 @@ npm run dev
 
 브라우저에서 `http://localhost:3000`을 열면 됩니다.
 
+## Persistent State (Supabase)
+
+조 편성/대진표/결과 상태를 서버에 보존하려면 환경변수를 설정하세요.
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...
+SUPABASE_SERVICE_ROLE_KEY=...
+```
+
+`supabase/schema.sql`에 있는 스키마를 적용한 뒤 실행하면, 앱이 `/api/state`를 통해 상태를 자동 저장/복원합니다.
+
 ## Scripts
 
 ```bash

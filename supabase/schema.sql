@@ -76,5 +76,11 @@ create table match_results (
   recorded_at timestamptz not null default now()
 );
 
+create table app_states (
+  state_key text primary key,
+  payload jsonb not null,
+  updated_at timestamptz not null default now()
+);
+
 create index matches_event_time_idx on matches(event_id, starts_at, court_id);
 create index match_players_player_idx on match_players(player_id);
